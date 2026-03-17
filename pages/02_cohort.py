@@ -94,14 +94,6 @@ def fmt_int(x):
     except Exception:
         return ""
 
-def fmt_num(x, decimals=2):
-    if pd.isna(x):
-        return ""
-    try:
-        return f"{float(x):,.{decimals}f}"
-    except Exception:
-        return ""
-
 def fmt_pct(x, decimals=2):
     if pd.isna(x):
         return ""
@@ -230,6 +222,8 @@ def build_crm(df_f: pd.DataFrame, group_cols):
         work["Kiểm_tra_tên"] = None
     if "Trạng_thái_số_điện_thoại" not in work.columns:
         work["Trạng_thái_số_điện_thoại"] = None
+    if "Số_CT" not in work.columns:
+        work["Số_CT"] = None
 
     d = (
         work.groupby(required_cols, observed=True)
@@ -245,6 +239,16 @@ def build_crm(df_f: pd.DataFrame, group_cols):
         )
         .reset_index()
     )
+
+    latest_tx = (
+        work.sort_values(["Ngày", "Số_CT"])
+        .groupby(required_cols, observed=True)
+        .tail(1)
+    )
+    latest_tx = latest_tx[required_cols + ["Số_CT"]].copy()
+    latest_tx = latest_tx.rename(columns={"Số_CT": "Last_Số_CT"})
+
+    d = d.merge(latest_tx, on=required_cols, how="left")
     return d
 
 df_export = build_crm(df_f, group_cols)
@@ -284,6 +288,7 @@ display_cols = [
     "Orders",
     "Bao_lâu_không_mua",
     "Last_Order",
+    "Last_Số_CT",
 ]
 if not GROUP_BY_CUSTOMER and "Điểm_mua_hàng" in df_export.columns:
     display_cols.insert(1, "Điểm_mua_hàng")
