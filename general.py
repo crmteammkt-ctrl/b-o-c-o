@@ -4,7 +4,7 @@ import numpy as np
 import streamlit as st
 
 # =====================================================
-# LOAD DATA (QUAN TRỌNG NHẤT)
+# LOAD DATA
 # =====================================================
 @st.cache_data(show_spinner=False)
 def load_data():
@@ -15,7 +15,7 @@ def load_data():
 
     df["Ngày"] = pd.to_datetime(df["Ngày"], errors="coerce")
 
-    # tối ưu RAM + tốc độ
+    # tối ưu
     cat_cols = ["LoaiCT", "Brand", "Region", "Điểm_mua_hàng", "Mã_NB"]
     for c in cat_cols:
         if c in df.columns:
@@ -28,21 +28,6 @@ df = load_data()
 if df is None or df.empty:
     st.warning("⚠ Không có dữ liệu.")
     st.stop()
-
-# =====================================================
-# FORMAT HELPERS
-# =====================================================
-def fmt_int(x):
-    try:
-        return f"{float(x):,.0f}"
-    except:
-        return ""
-
-def fmt_pct(x):
-    try:
-        return f"{float(x):,.2f}%"
-    except:
-        return ""
 
 # =====================================================
 # UI
@@ -91,16 +76,14 @@ if df_f.empty:
 gross = df_f["Tổng_Gross"].sum()
 net = df_f["Tổng_Net"].sum()
 orders = df_f["Số_CT"].nunique()
-customers = df_f["Số_điện_thoại"].nunique()
 
 ck = (1 - net / gross) * 100 if gross > 0 else 0
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4 = st.columns(4)
 c1.metric("Gross", f"{gross:,.0f}")
 c2.metric("Net", f"{net:,.0f}")
 c3.metric("CK %", f"{ck:.2f}%")
 c4.metric("Đơn hàng", f"{orders:,}")
-c5.metric("Khách hàng", f"{customers:,}")
 
 # =====================================================
 # TIME TABLE
@@ -115,17 +98,20 @@ g_time = (
         Gross=("Tổng_Gross", "sum"),
         Net=("Tổng_Net", "sum"),
         Orders=("Số_CT", "nunique"),
-        Customers=("Số_điện_thoại", "nunique"),
     )
     .reset_index()
     .sort_values("Time")
 )
 
-g_time["CK_%"] = np.where(g_time["Gross"] > 0, (1 - g_time["Net"] / g_time["Gross"]) * 100, 0)
+g_time["CK_%"] = np.where(
+    g_time["Gross"] > 0,
+    (1 - g_time["Net"] / g_time["Gross"]) * 100,
+    0
+)
 
 g_time["Time"] = g_time["Time"].astype(str)
 
-st.dataframe(g_time)
+st.dataframe(g_time, use_container_width=True)
 
 # =====================================================
 # REGION
@@ -138,15 +124,18 @@ g_region = (
         Gross=("Tổng_Gross", "sum"),
         Net=("Tổng_Net", "sum"),
         Orders=("Số_CT", "nunique"),
-        Customers=("Số_điện_thoại", "nunique"),
     )
     .reset_index()
     .sort_values("Net", ascending=False)
 )
 
-g_region["CK_%"] = np.where(g_region["Gross"] > 0, (1 - g_region["Net"] / g_region["Gross"]) * 100, 0)
+g_region["CK_%"] = np.where(
+    g_region["Gross"] > 0,
+    (1 - g_region["Net"] / g_region["Gross"]) * 100,
+    0
+)
 
-st.dataframe(g_region)
+st.dataframe(g_region, use_container_width=True)
 
 # =====================================================
 # STORE
@@ -159,15 +148,18 @@ g_store = (
         Gross=("Tổng_Gross", "sum"),
         Net=("Tổng_Net", "sum"),
         Orders=("Số_CT", "nunique"),
-        Customers=("Số_điện_thoại", "nunique"),
     )
     .reset_index()
     .sort_values("Net", ascending=False)
 )
 
-g_store["CK_%"] = np.where(g_store["Gross"] > 0, (1 - g_store["Net"] / g_store["Gross"]) * 100, 0)
+g_store["CK_%"] = np.where(
+    g_store["Gross"] > 0,
+    (1 - g_store["Net"] / g_store["Gross"]) * 100,
+    0
+)
 
-st.dataframe(g_store)
+st.dataframe(g_store, use_container_width=True)
 
 # =====================================================
 # PRODUCT
@@ -180,12 +172,15 @@ g_prod = (
         Gross=("Tổng_Gross", "sum"),
         Net=("Tổng_Net", "sum"),
         Orders=("Số_lượng", "sum"),
-        Customers=("Số_điện_thoại", "nunique"),
     )
     .reset_index()
     .sort_values("Net", ascending=False)
 )
 
-g_prod["CK_%"] = np.where(g_prod["Gross"] > 0, (1 - g_prod["Net"] / g_prod["Gross"]) * 100, 0)
+g_prod["CK_%"] = np.where(
+    g_prod["Gross"] > 0,
+    (1 - g_prod["Net"] / g_prod["Gross"]) * 100,
+    0
+)
 
-st.dataframe(g_prod)
+st.dataframe(g_prod, use_container_width=True)
