@@ -9,7 +9,7 @@ from io import BytesIO
 # =====================================================
 @st.cache_data(show_spinner=False)
 def load_data():
-    df = pd.read_parquet("data/crm.parquet")
+    df = pd.read_parquet("data/crm_cohort.parquet")
 
     if df is None or df.empty:
         return df
