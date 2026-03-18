@@ -19,7 +19,7 @@ def load_data():
 
     for c in ["Tổng_Gross", "Tổng_Net"]:
         if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
     for c in [
         "LoaiCT", "Brand", "Region", "Điểm_mua_hàng",
@@ -34,7 +34,19 @@ def load_data():
     if "tên_KH" not in df.columns:
         df["tên_KH"] = None
 
+    if "Số_điện_thoại" in df.columns:
+        df["Số_điện_thoại"] = (
+            df["Số_điện_thoại"]
+            .astype(str)
+            .str.replace(".0", "", regex=False)
+            .str.strip()
+        )
+
+    if "Số_CT" in df.columns:
+        df["Số_CT"] = df["Số_CT"].astype(str).str.strip()
+
     return df
+
 
 @st.cache_data(show_spinner=False)
 def get_first_purchase(df):
@@ -49,6 +61,7 @@ def get_first_purchase(df):
     )
     out["First_Date"] = pd.to_datetime(out["First_Date"], errors="coerce")
     return out
+
 
 # =====================================================
 # SAFE MULTISELECT WITH "ALL"
@@ -83,6 +96,7 @@ def safe_multiselect_all(
         return opts
     return [x for x in selected if x in opts]
 
+
 # =====================================================
 # FORMAT HELPERS
 # =====================================================
@@ -113,6 +127,7 @@ def show_df(df_show: pd.DataFrame, title: str | None = None):
         st.subheader(title)
     st.dataframe(df_show, use_container_width=True, hide_index=True)
 
+
 # =====================================================
 # PAGE
 # =====================================================
@@ -124,6 +139,7 @@ st.sidebar.caption(f"RAM df ~ {df.memory_usage(deep=True).sum() / 1024**2:.1f} M
 if df.empty:
     st.warning("⚠ Không có dữ liệu để phân tích. Kiểm tra lại nguồn dữ liệu.")
     st.stop()
+
 
 # =====================================================
 # SIDEBAR FILTER
@@ -172,6 +188,7 @@ with st.sidebar:
         default_all=True,
     )
 
+
 def apply_filters(df: pd.DataFrame, start_date, end_date, loaiCT, brand, region, store) -> pd.DataFrame:
     mask = (df["Ngày"] >= pd.to_datetime(start_date)) & (df["Ngày"] <= pd.to_datetime(end_date))
 
@@ -186,6 +203,7 @@ def apply_filters(df: pd.DataFrame, start_date, end_date, loaiCT, brand, region,
 
     return df.loc[mask].copy()
 
+
 df_f = apply_filters(df, start_date, end_date, loaiCT_filter, brand_filter, region_filter, store_filter)
 
 if df_f.empty:
@@ -194,9 +212,10 @@ if df_f.empty:
 
 today = df_f["Ngày"].max()
 
-# =========================
+
+# =====================================================
 # PARAMETER XUẤT CRM & PHÂN LOẠI KH
-# =========================
+# =====================================================
 st.sidebar.header("📤 Xuất KH")
 
 INACTIVE_DAYS = st.sidebar.slider("Inactive ≥ bao nhiêu ngày", 30, 365, 90, 15)
@@ -212,21 +231,63 @@ group_cols = ["Số_điện_thoại"]
 if not GROUP_BY_CUSTOMER and "Điểm_mua_hàng" in df_f.columns:
     group_cols.append("Điểm_mua_hàng")
 
-def build_crm(df_f: pd.DataFrame, group_cols):
-    required_cols = [c for c in group_cols if c in df_f.columns]
-    work = df_f.copy()
+
+# =====================================================
+# BUILD CRM
+# =====================================================
+def build_crm(df_f: pd.DataFrame, group_cols, group_all_customer: bool):
+    work = df_f
 
     if "tên_KH" not in work.columns:
+        work = work.copy()
         work["tên_KH"] = None
     if "Kiểm_tra_tên" not in work.columns:
+        work = work.copy() if "tên_KH" in work.columns else work.copy()
         work["Kiểm_tra_tên"] = None
     if "Trạng_thái_số_điện_thoại" not in work.columns:
+        work = work.copy()
         work["Trạng_thái_số_điện_thoại"] = None
     if "Số_CT" not in work.columns:
+        work = work.copy()
         work["Số_CT"] = None
 
+    # ==================================================
+    # CASE 1: KHÔNG gộp tất cả giao dịch của 1 KH
+    # => mỗi đơn = 1 dòng
+    # ==================================================
+    if not group_all_customer:
+        order_keys = ["Số_điện_thoại"]
+        if "Điểm_mua_hàng" in work.columns:
+            order_keys.append("Điểm_mua_hàng")
+        order_keys += ["Ngày", "Số_CT"]
+
+        d = (
+            work.groupby(order_keys, observed=True, dropna=False)
+            .agg(
+                Name=("tên_KH", "first"),
+                Name_Check=("Kiểm_tra_tên", "first"),
+                Gross=("Tổng_Gross", "sum"),
+                Net=("Tổng_Net", "sum"),
+                Check_SDT=("Trạng_thái_số_điện_thoại", "first"),
+            )
+            .reset_index()
+        )
+
+        d["Orders"] = 1
+        d["First_Order"] = d["Ngày"]
+        d["Last_Order"] = d["Ngày"]
+        d["Last_Số_CT"] = d["Số_CT"]
+        return d
+
+    # ==================================================
+    # CASE 2: CÓ gộp tất cả giao dịch của 1 KH
+    # => Gross/Net cộng dồn, Orders cộng dồn,
+    #    Last_Order và Last_Số_CT lấy lần gần nhất
+    # ==================================================
+    required_cols = [c for c in group_cols if c in work.columns]
+
     d = (
-        work.groupby(required_cols, observed=True)
+        work.groupby(required_cols, observed=True, dropna=False)
         .agg(
             Name=("tên_KH", "first"),
             Name_Check=("Kiểm_tra_tên", "first"),
@@ -242,60 +303,84 @@ def build_crm(df_f: pd.DataFrame, group_cols):
 
     latest_tx = (
         work.sort_values(["Ngày", "Số_CT"])
-        .groupby(required_cols, observed=True)
+        .groupby(required_cols, observed=True, dropna=False)
         .tail(1)
+        .copy()
     )
-    latest_tx = latest_tx[required_cols + ["Số_CT"]].copy()
-    latest_tx = latest_tx.rename(columns={"Số_CT": "Last_Số_CT"})
+
+    latest_tx = latest_tx[required_cols + ["Số_CT"]].rename(
+        columns={"Số_CT": "Last_Số_CT"}
+    )
 
     d = d.merge(latest_tx, on=required_cols, how="left")
     return d
 
-df_export = build_crm(df_f, group_cols)
 
+df_export = build_crm(df_f, group_cols, GROUP_BY_CUSTOMER)
+
+# =====================================================
+# CRM METRICS
+# =====================================================
 df_export["CK_%"] = np.where(
     df_export["Gross"] > 0,
     (df_export["Gross"] - df_export["Net"]) / df_export["Gross"] * 100,
     0,
 ).round(2)
 
-df_export["Days_Inactive"] = (today - df_export["Last_Order"]).dt.days
+if GROUP_BY_CUSTOMER:
+    df_export["Days_Inactive"] = (today - df_export["Last_Order"]).dt.days
 
-df_export["KH_tag"] = np.select(
-    [
-        df_export["Days_Inactive"] >= INACTIVE_DAYS,
-        df_export["Net"] >= VIP_NET_THRESHOLD,
-    ],
-    ["KH Inactive", "KH VIP"],
-    default="Khách hàng",
-)
+    df_export["KH_tag"] = np.select(
+        [
+            df_export["Days_Inactive"] >= INACTIVE_DAYS,
+            df_export["Net"] >= VIP_NET_THRESHOLD,
+        ],
+        ["KH Inactive", "KH VIP"],
+        default="Khách hàng",
+    )
 
-df_export["Bao_lâu_không_mua"] = np.where(
-    df_export["KH_tag"] == "KH Inactive",
-    df_export["Days_Inactive"],
-    np.nan,
-).astype("float")
+    df_export["Bao_lâu_không_mua"] = np.where(
+        df_export["KH_tag"] == "KH Inactive",
+        df_export["Days_Inactive"],
+        np.nan,
+    ).astype("float")
+else:
+    df_export["KH_tag"] = ""
+    df_export["Bao_lâu_không_mua"] = np.nan
 
 df_export = df_export[df_export["Net"] >= min_net].copy()
 
-display_cols = [
-    "Số_điện_thoại",
-    "Name",
-    "KH_tag",
-    "Gross",
-    "Net",
-    "CK_%",
-    "Orders",
-    "Bao_lâu_không_mua",
-    "Last_Order",
-    "Last_Số_CT",
-]
-if not GROUP_BY_CUSTOMER and "Điểm_mua_hàng" in df_export.columns:
-    display_cols.insert(1, "Điểm_mua_hàng")
+if GROUP_BY_CUSTOMER:
+    display_cols = [
+        "Số_điện_thoại",
+        "Name",
+        "KH_tag",
+        "Gross",
+        "Net",
+        "CK_%",
+        "Orders",
+        "Bao_lâu_không_mua",
+        "Last_Order",
+        "Last_Số_CT",
+    ]
+    if "Điểm_mua_hàng" in df_export.columns:
+        display_cols.insert(1, "Điểm_mua_hàng")
+else:
+    display_cols = [
+        "Số_điện_thoại",
+        "Name",
+        "Ngày",
+        "Số_CT",
+        "Gross",
+        "Net",
+        "CK_%",
+    ]
+    if "Điểm_mua_hàng" in df_export.columns:
+        display_cols.insert(1, "Điểm_mua_hàng")
 
-# =========================
+# =====================================================
 # FILTER BẢNG CRM
-# =========================
+# =====================================================
 st.subheader("📄 Danh sách KH xuất CRM")
 st.markdown("### 🔎 Lọc nhanh trên bảng")
 
@@ -326,16 +411,17 @@ with col5:
         default_all=True,
     )
 
-selected_tags = []
-if show_inactive:
-    selected_tags.append("KH Inactive")
-if show_vip:
-    selected_tags.append("KH VIP")
-if show_customer:
-    selected_tags.append("Khách hàng")
+if GROUP_BY_CUSTOMER:
+    selected_tags = []
+    if show_inactive:
+        selected_tags.append("KH Inactive")
+    if show_vip:
+        selected_tags.append("KH VIP")
+    if show_customer:
+        selected_tags.append("Khách hàng")
 
-if selected_tags:
-    df_export = df_export[df_export["KH_tag"].isin(selected_tags)]
+    if selected_tags:
+        df_export = df_export[df_export["KH_tag"].isin(selected_tags)]
 
 if check_sdt_filter and "Check_SDT" in df_export.columns:
     df_export = df_export[df_export["Check_SDT"].isin(check_sdt_filter)]
@@ -360,7 +446,7 @@ for col in df_export.columns:
         total_row[col] = df_export[col].sum()
     elif col == "CK_%":
         total_row[col] = df_export[col].mean()
-    elif col == "Last_Order":
+    elif col in ["Last_Order", "Ngày"]:
         total_row[col] = pd.NaT
     elif col == "Số_điện_thoại":
         total_row[col] = "TỔNG"
@@ -374,6 +460,10 @@ df_export_with_total = pd.concat([df_export, pd.DataFrame([total_row])], ignore_
 display_cols = [c for c in display_cols if c in df_export_with_total.columns]
 df_export_display = df_export_with_total[display_cols].copy()
 
+# Đổi tên hiển thị cho đẹp ở mode không gộp
+if not GROUP_BY_CUSTOMER and "Ngày" in df_export_display.columns:
+    df_export_display = df_export_display.rename(columns={"Ngày": "Ngày_mua"})
+
 for c in ["Gross", "Net", "Orders"]:
     if c in df_export_display.columns:
         df_export_display[c] = df_export_display[c].apply(fmt_int)
@@ -386,10 +476,11 @@ if "Bao_lâu_không_mua" in df_export_display.columns:
         lambda v: "" if pd.isna(v) else fmt_int(v)
     )
 
-if "Last_Order" in df_export_display.columns:
-    df_export_display["Last_Order"] = pd.to_datetime(
-        df_export_display["Last_Order"], errors="coerce"
-    ).dt.strftime("%Y-%m-%d")
+for dt_col in ["Last_Order", "Ngày_mua", "Ngày"]:
+    if dt_col in df_export_display.columns:
+        df_export_display[dt_col] = pd.to_datetime(
+            df_export_display[dt_col], errors="coerce"
+        ).dt.strftime("%Y-%m-%d")
 
 show_df(df_export_display, title=None)
 
@@ -400,9 +491,9 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-# =========================
+# =====================================================
 # PARETO KH THEO CỬA HÀNG
-# =========================
+# =====================================================
 st.sidebar.header("🏆 Pareto KH theo Cửa hàng")
 
 pareto_percent = st.sidebar.slider("Chọn % KH Pareto", 5, 50, 20)
@@ -477,9 +568,9 @@ if not df_pareto.empty:
 else:
     st.info("Không có dữ liệu phù hợp cho Pareto.")
 
-# =========================
+# =====================================================
 # KH MỚI VS KH QUAY LẠI
-# =========================
+# =====================================================
 df_fp = get_first_purchase(df)
 df_kh = df_f.merge(df_fp, on="Số_điện_thoại", how="left")
 df_kh["KH_type"] = np.where(
@@ -495,9 +586,9 @@ st.dataframe(
     hide_index=True,
 )
 
-# =========================
+# =====================================================
 # COHORT RETENTION
-# =========================
+# =====================================================
 st.sidebar.subheader("⚙️ Cohort Retention")
 MAX_MONTH = st.sidebar.slider("Giới hạn số tháng retention", 3, 12, 7)
 
@@ -549,9 +640,9 @@ else:
             retention_show[c] = retention_show[c].apply(lambda v: fmt_pct(v, 2))
     show_df(retention_show, title=None)
 
-# =========================
+# =====================================================
 # RESET FILTERS
-# =========================
+# =====================================================
 with st.sidebar:
     if st.button("🔄 Reset filters"):
         for k in [
