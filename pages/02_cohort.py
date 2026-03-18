@@ -568,23 +568,6 @@ if not df_pareto.empty:
 else:
     st.info("Không có dữ liệu phù hợp cho Pareto.")
 
-# =====================================================
-# KH MỚI VS KH QUAY LẠI
-# =====================================================
-df_fp = get_first_purchase(df)
-df_kh = df_f.merge(df_fp, on="Số_điện_thoại", how="left")
-df_kh["KH_type"] = np.where(
-    df_kh["First_Date"].dt.date >= pd.to_datetime(start_date).date(),
-    "KH mới",
-    "KH quay lại",
-)
-
-st.subheader("👥 KH mới vs KH quay lại")
-st.dataframe(
-    df_kh.groupby("KH_type")["Số_điện_thoại"].nunique().reset_index(name="Số KH"),
-    use_container_width=True,
-    hide_index=True,
-)
 
 # =====================================================
 # COHORT RETENTION
