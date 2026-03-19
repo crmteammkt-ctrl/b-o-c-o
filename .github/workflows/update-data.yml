@@ -16,6 +16,14 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pyarrow openpyxl requests
+
       - name: Run update script
+        env:
+          DATA_URL: ${{ secrets.DATA_URL }}
+          SHEET_NAME: data
         run: |
           python update_db_online.py
