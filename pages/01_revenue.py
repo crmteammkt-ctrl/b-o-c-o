@@ -27,6 +27,17 @@ def fmt_pct(x, decimals=2, with_sign=False):
     except Exception:
         return ""
 
+def fmt_signed_int(x):
+    """Format a number with explicit + sign for positive values, e.g. +8,000 / -27,600."""
+    if pd.isna(x):
+        return ""
+    try:
+        v = float(x)
+        sign = "+" if v > 0 else ""
+        return sign + fmt_int(v)
+    except Exception:
+        return ""
+
 # =====================================================
 # LOAD DATA
 # =====================================================
@@ -388,6 +399,12 @@ else:
         (1 - store["Tổng_Net"] / store["Tổng_Gross"]) * 100,
         0,
     )
+
+    # Net Impact = Net kỳ hiện tại - Net kỳ trước (chênh lệch tuyệt đối bằng tiền).
+    # Khác với Change Net% (biến động tương đối), Impact cho biết cửa hàng
+    # thực tế làm tăng/giảm bao nhiêu tiền Net so với kỳ trước.
+    store["Net Impact"] = store.groupby("Điểm_mua_hàng")["Tổng_Net"].diff()
+
     store["Change Net%"] = store.groupby("Điểm_mua_hàng")["Tổng_Net"].pct_change() * 100
     store["Change Gross%"] = store.groupby("Điểm_mua_hàng")["Tổng_Gross"].pct_change() * 100
     store["Change ĐH%"] = store.groupby("Điểm_mua_hàng")["Số_đơn_hàng"].pct_change() * 100
@@ -445,10 +462,58 @@ else:
         st.info("Không có dữ liệu Top/Bottom theo lựa chọn hiện tại.")
         st.stop()
 
-    top10 = s_view.sort_values("Tổng_Net", ascending=False).head(10).copy()
-    bottom10 = s_view.sort_values("Tổng_Net", ascending=True).head(10).copy()
+    # =====================================================
+    # BIẾN ĐỘNG THEO CỬA HÀNG (TORNADO CHART)
+    # Dùng chung bộ lọc kỳ + region của phần Top/Bottom (s_view)
+    # =====================================================
+    st.markdown(f"### 📊 Biến động theo cửa hàng — {sel_period2}")
 
-    def _fmt_store(df_in: pd.DataFrame) -> pd.DataFrame:
+    metric_options = {
+        "Net": "Change Net%",
+        "Gross": "Change Gross%",
+        "Đơn hàng": "Change ĐH%",
+    }
+
+    sel_metric_label = st.selectbox(
+        "Chọn chỉ số biến động",
+        list(metric_options.keys()),
+        key=REV + "tb_change_metric",
+    )
+    sel_metric_col = metric_options[sel_metric_label]
+
+    chart_data = s_view.dropna(subset=[sel_metric_col]).copy()
+
+    if chart_data.empty:
+        st.info("Không có dữ liệu biến động cho kỳ này (kỳ đầu tiên không có kỳ trước để so sánh).")
+    else:
+        chart_data = chart_data.sort_values(sel_metric_col, ascending=True)
+
+        fig_change = px.bar(
+            chart_data,
+            x=sel_metric_col,
+            y="Điểm_mua_hàng",
+            orientation="h",
+            text=chart_data[sel_metric_col].apply(lambda v: fmt_pct(v, 2, with_sign=True)),
+        )
+
+        colors = np.where(chart_data[sel_metric_col] >= 0, "#2ECC71", "#5B9BF0")
+        fig_change.update_traces(marker_color=colors, textposition="outside")
+        fig_change.update_layout(
+            xaxis_title=None,
+            yaxis_title=None,
+            yaxis=dict(
+                categoryorder="array",
+                categoryarray=chart_data["Điểm_mua_hàng"].tolist(),
+            ),
+            height=max(300, len(chart_data) * 35),
+            margin=dict(l=0, r=0, t=10, b=0),
+        )
+        st.plotly_chart(fig_change, use_container_width=True)
+
+    # =====================================================
+    # FORMAT HELPER FOR STORE TABLES
+    # =====================================================
+    def _fmt_store(df_in: pd.DataFrame, include_impact: bool = True) -> pd.DataFrame:
         cols = [
             "Label",
             "Điểm_mua_hàng",
@@ -459,8 +524,12 @@ else:
             "Tỷ_lệ_CK (%)",
             "Change Gross%",
             "Change Net%",
+            "Net Impact",
             "Change ĐH%",
         ]
+
+        if not include_impact:
+            cols = [c for c in cols if c != "Net Impact"]
 
         if "Region" in df_in.columns:
             cols.insert(2, "Region")
@@ -480,12 +549,56 @@ else:
             if c in out.columns:
                 out[c] = out[c].apply(lambda v: fmt_pct(v, 2, with_sign=True))
 
+        if "Net Impact" in out.columns:
+            out["Net Impact"] = out["Net Impact"].apply(fmt_signed_int)
+
         return out
+
+    st.caption(
+        "💡 Net Impact = Tổng_Net kỳ đang chọn − Tổng_Net kỳ trước. "
+        "Chỉ số này cho biết cửa hàng thực tế đóng góp/tổn thất bao nhiêu tiền Net, "
+        "không chỉ nhìn % tăng giảm."
+    )
+
+    # -----------------------------------------------------
+    # Top / Bottom theo DOANH THU (Tổng_Net hiện tại)
+    # -----------------------------------------------------
+    top10 = s_view.sort_values("Tổng_Net", ascending=False).head(10).copy()
+    bottom10 = s_view.sort_values("Tổng_Net", ascending=True).head(10).copy()
 
     colA, colB = st.columns(2)
     with colA:
-        st.markdown("### 🏆 Top 10 Điểm mua hàng")
+        st.markdown("### 🏆 Top 10 Điểm mua hàng (theo doanh thu)")
         st.dataframe(_fmt_store(top10), use_container_width=True, hide_index=True)
     with colB:
-        st.markdown("### 📉 Bottom 10 Điểm mua hàng")
+        st.markdown("### 📉 Bottom 10 Điểm mua hàng (theo doanh thu)")
         st.dataframe(_fmt_store(bottom10), use_container_width=True, hide_index=True)
+
+    # -----------------------------------------------------
+    # Top / Bottom theo NET IMPACT (cửa hàng tăng/giảm nhiều tiền nhất)
+    # -----------------------------------------------------
+    st.markdown("### 🎯 Top 10 Impact — cửa hàng ảnh hưởng lớn nhất đến kết quả kỳ này")
+    st.caption(
+        "Xếp theo Net Impact (chênh lệch Net tuyệt đối so với kỳ trước), "
+        "không phải theo quy mô doanh thu — giúp thấy đúng cửa hàng nào đang "
+        "kéo tăng/giảm kết quả chung, bất kể cửa hàng lớn hay nhỏ."
+    )
+
+    impact_view = s_view.dropna(subset=["Net Impact"]).copy()
+
+    if impact_view.empty:
+        st.info(
+            "Không có dữ liệu Net Impact cho kỳ này "
+            "(kỳ đầu tiên không có kỳ trước để so sánh)."
+        )
+    else:
+        top10_impact = impact_view.sort_values("Net Impact", ascending=False).head(10).copy()
+        bottom10_impact = impact_view.sort_values("Net Impact", ascending=True).head(10).copy()
+
+        colC, colD = st.columns(2)
+        with colC:
+            st.markdown("### 🟢 Top 10 Positive Impact")
+            st.dataframe(_fmt_store(top10_impact), use_container_width=True, hide_index=True)
+        with colD:
+            st.markdown("### 🔴 Top 10 Negative Impact")
+            st.dataframe(_fmt_store(bottom10_impact), use_container_width=True, hide_index=True)
