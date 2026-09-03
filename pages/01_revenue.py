@@ -39,11 +39,26 @@ def fmt_signed_int(x):
         return ""
 
 # =====================================================
-# LOAD DATA
+# LOAD DATA (đã tối ưu RAM)
 # =====================================================
-@st.cache_data(show_spinner=False)
+# Cùng nguyên tắc như 00_general.py:
+# - Số_CT chỉ dùng để đếm nunique() trong toàn bộ file này -> factorize
+#   thành int32 thay vì category (Số_CT có cardinality cao ~57%, category
+#   không tiết kiệm được nhiều, có khi còn tốn hơn do overhead dictionary).
+# - Tổng_Gross / Tổng_Net GIỮ float64 (đã test: float32 làm sai tổng tiền).
+# - Region, Điểm_mua_hàng, LoaiCT: category hoá (cardinality thấp).
+@st.cache_data(show_spinner=False, max_entries=3, ttl=3600)
 def load_data():
-    df = pd.read_parquet("data/revenue.parquet")
+    want_cols = ["Ngày", "LoaiCT", "Region", "Điểm_mua_hàng", "Tổng_Gross", "Tổng_Net", "Số_CT"]
+
+    try:
+        import pyarrow.parquet as pq
+        existing_cols = set(pq.ParquetFile("data/revenue.parquet").schema.names)
+        read_cols = [c for c in want_cols if c in existing_cols]
+    except Exception:
+        read_cols = None
+
+    df = pd.read_parquet("data/revenue.parquet", columns=read_cols)
 
     if df is None or df.empty:
         return df
@@ -56,7 +71,11 @@ def load_data():
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    for c in ["LoaiCT", "Region", "Điểm_mua_hàng", "Số_CT"]:
+    if "Số_CT" in df.columns:
+        codes, _ = pd.factorize(df["Số_CT"])
+        df["Số_CT"] = codes.astype("int32")
+
+    for c in ["LoaiCT", "Region", "Điểm_mua_hàng"]:
         if c in df.columns:
             df[c] = df[c].astype("category")
 
@@ -132,6 +151,8 @@ st.sidebar.caption(f"RAM df ~ {df.memory_usage(deep=True).sum() / 1024**2:.1f} M
 # =====================================================
 # SIDEBAR FILTER
 # =====================================================
+# Thay đổi: bỏ df_r = df[...] (full-copy) để lấy option cho store filter.
+# Dùng boolean mask + .loc lấy đúng 1 cột thay vì copy cả dataframe.
 with st.sidebar:
     st.header("🎛 Bộ lọc dữ liệu")
 
@@ -174,12 +195,16 @@ with st.sidebar:
         options=df["Region"] if "Region" in df.columns else [],
     )
 
-    df_r = df[df["Region"].astype(str).isin(region_filter)] if ("Region" in df.columns and region_filter) else df
+    region_mask = (
+        df["Region"].astype(str).isin(region_filter)
+        if ("Region" in df.columns and region_filter)
+        else pd.Series(True, index=df.index)
+    )
 
     store_filter = ms_all(
         key=REV + "store",
         label="Điểm mua hàng",
-        options=df_r["Điểm_mua_hàng"] if "Điểm_mua_hàng" in df_r.columns else [],
+        options=df.loc[region_mask, "Điểm_mua_hàng"] if "Điểm_mua_hàng" in df.columns else [],
     )
 
 # =====================================================

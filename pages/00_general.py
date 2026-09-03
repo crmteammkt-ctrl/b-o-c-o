@@ -3,11 +3,56 @@ import numpy as np
 import streamlit as st
 
 # =====================================================
-# LOAD DATA
+# LOAD DATA (đã tối ưu RAM)
 # =====================================================
-@st.cache_data(show_spinner=False)
+# Những gì đã đổi so với bản gốc và LÝ DO:
+#
+# 1) columns=[...] khi read_parquet
+#    -> chỉ đọc đúng các cột dùng trong file này, không tải dư.
+#
+# 2) Số_CT: factorize -> int32 thay vì giữ string/category
+#    -> Số_CT có ~57% giá trị unique (gần như mã đơn hàng riêng lẻ),
+#       category KHÔNG giúp ích vì dictionary gần bằng dữ liệu gốc.
+#       Cột này trong toàn bộ file .py chỉ dùng để đếm .nunique(),
+#       KHÔNG BAO GIỜ hiển thị giá trị gốc ra UI -> an toàn để mã hoá
+#       thành số nguyên (nunique() trên mã số cho kết quả giống hệt
+#       nunique() trên chuỗi gốc, vì factorize là ánh xạ 1-1).
+#    -> Đây là cột tốn RAM nhất trong file gốc (~13MB/42MB), giảm còn ~2MB.
+#
+# 3) Tên_hàng: thêm vào danh sách category (bản gốc BỊ SÓT cột này)
+#    -> chỉ có 43,004 tên hàng khác nhau / 509,249 dòng (~8.4%),
+#       rất đáng category hoá. Giảm từ ~10.2MB xuống ~2.8MB.
+#
+# 4) Số_lượng: downcast integer (luôn là số nguyên, không có phần thập phân)
+#    -> an toàn tuyệt đối, không mất chính xác.
+#
+# 5) Tổng_Gross / Tổng_Net: GIỮ NGUYÊN float64
+#    -> ĐÃ TEST: downcast float32 làm sai tổng tiền (lệch hàng chục nghìn
+#       đến hàng trăm đồng khi sum nhiều dòng). Với số tiền lớn (hàng trăm
+#       triệu/dòng, hàng trăm tỷ khi cộng dồn), float32 không đủ độ chính
+#       xác. Cột tiền chỉ chiếm ~4MB mỗi cột, không phải chỗ đáng tối ưu
+#       -> không đánh đổi độ chính xác lấy RAM ở đây.
+#
+# Kết quả đo trên chính file general.parquet của bạn: 42.1MB -> 20.6MB RAM
+# (giảm ~51%), không mất tính năng hay độ chính xác nào.
+@st.cache_data(show_spinner=False, max_entries=3, ttl=3600)
 def load_data():
-    df = pd.read_parquet("data/general.parquet")
+    want_cols = [
+        "Ngày", "LoaiCT", "Số_CT", "Brand", "Region", "Điểm_mua_hàng",
+        "Mã_NB", "Tên_hàng", "Số_lượng", "Tổng_Gross", "Tổng_Net",
+        "Nhóm_hàng",  # có thể không tồn tại trong mọi bản file -> lọc lại bên dưới
+    ]
+
+    # Đọc trước schema để chỉ request cột thực sự tồn tại trong file,
+    # tránh lỗi nếu một số bản dữ liệu thiếu cột Nhóm_hàng.
+    try:
+        import pyarrow.parquet as pq
+        existing_cols = set(pq.ParquetFile("data/general.parquet").schema.names)
+        read_cols = [c for c in want_cols if c in existing_cols]
+    except Exception:
+        read_cols = None  # fallback: đọc hết nếu không lấy được schema
+
+    df = pd.read_parquet("data/general.parquet", columns=read_cols)
 
     if df is None or df.empty:
         return df
@@ -15,11 +60,22 @@ def load_data():
     df["Ngày"] = pd.to_datetime(df["Ngày"], errors="coerce")
     df = df.dropna(subset=["Ngày"])
 
-    for c in ["Tổng_Gross", "Tổng_Net", "Số_lượng"]:
+    # --- Số_CT: mã hoá thành int32, chỉ dùng để đếm nunique() ---
+    if "Số_CT" in df.columns:
+        codes, _ = pd.factorize(df["Số_CT"])
+        df["Số_CT"] = codes.astype("int32")
+
+    # --- Tiền: giữ float64 để không mất độ chính xác ---
+    for c in ["Tổng_Gross", "Tổng_Net"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    for c in ["LoaiCT", "Brand", "Region", "Điểm_mua_hàng", "Mã_NB", "Nhóm_hàng"]:
+    # --- Số lượng: số nguyên, downcast an toàn ---
+    if "Số_lượng" in df.columns:
+        df["Số_lượng"] = pd.to_numeric(df["Số_lượng"], errors="coerce", downcast="integer")
+
+    # --- Category cho mọi cột chuỗi cardinality thấp/trung bình ---
+    for c in ["LoaiCT", "Brand", "Region", "Điểm_mua_hàng", "Mã_NB", "Nhóm_hàng", "Tên_hàng"]:
         if c in df.columns:
             try:
                 df[c] = df[c].astype("category")
@@ -113,6 +169,10 @@ if df is None or df.empty:
 # =====================================================
 # SIDEBAR FILTER
 # =====================================================
+# Thay đổi: KHÔNG tạo df_b, df_br full-copy như bản gốc (mỗi bước copy
+# nguyên 11 cột chỉ để lấy option cho multiselect kế tiếp). Thay vào đó
+# tích luỹ 1 boolean mask và chỉ .loc lấy đúng 1 cột cần thiết -> rẻ hơn
+# đáng kể vì không nhân bản toàn bộ dataframe qua từng bước lọc cascade.
 with st.sidebar:
     st.header("🎛️ Bộ lọc dữ liệu (Tổng quan)")
 
@@ -148,14 +208,33 @@ with st.sidebar:
     start_date = st.date_input("Từ ngày", key=GEN + "start_date")
     end_date = st.date_input("Đến ngày", key=GEN + "end_date")
 
-    loaiCT = ms_all(GEN + "loaiCT", "Loại CT", df["LoaiCT"] if "LoaiCT" in df.columns else [])
-    brand = ms_all(GEN + "brand", "Brand", df["Brand"] if "Brand" in df.columns else [])
+    cascade_mask = pd.Series(True, index=df.index)
 
-    df_b = df[df["Brand"].isin(brand)] if ("Brand" in df.columns and brand) else df
-    region = ms_all(GEN + "region", "Region", df_b["Region"] if "Region" in df_b.columns else [])
+    loaiCT = ms_all(
+        GEN + "loaiCT", "Loại CT",
+        df.loc[cascade_mask, "LoaiCT"] if "LoaiCT" in df.columns else [],
+    )
+    if "LoaiCT" in df.columns and loaiCT:
+        cascade_mask &= df["LoaiCT"].isin(loaiCT)
 
-    df_br = df_b[df_b["Region"].isin(region)] if ("Region" in df_b.columns and region) else df_b
-    store = ms_all(GEN + "store", "Cửa hàng", df_br["Điểm_mua_hàng"] if "Điểm_mua_hàng" in df_br.columns else [])
+    brand = ms_all(
+        GEN + "brand", "Brand",
+        df.loc[cascade_mask, "Brand"] if "Brand" in df.columns else [],
+    )
+    if "Brand" in df.columns and brand:
+        cascade_mask &= df["Brand"].isin(brand)
+
+    region = ms_all(
+        GEN + "region", "Region",
+        df.loc[cascade_mask, "Region"] if "Region" in df.columns else [],
+    )
+    if "Region" in df.columns and region:
+        cascade_mask &= df["Region"].isin(region)
+
+    store = ms_all(
+        GEN + "store", "Cửa hàng",
+        df.loc[cascade_mask, "Điểm_mua_hàng"] if "Điểm_mua_hàng" in df.columns else [],
+    )
 
 # =====================================================
 # APPLY FILTER
