@@ -599,31 +599,101 @@ else:
         st.markdown("### 📉 Bottom 10 Điểm mua hàng (theo doanh thu)")
         st.dataframe(_fmt_store(bottom10), use_container_width=True, hide_index=True)
 
-    # -----------------------------------------------------
-    # Top / Bottom theo NET IMPACT (cửa hàng tăng/giảm nhiều tiền nhất)
-    # -----------------------------------------------------
-    st.markdown("### 🎯 Top 10 Impact — cửa hàng ảnh hưởng lớn nhất đến kết quả kỳ này")
-    st.caption(
-        "Xếp theo Net Impact (chênh lệch Net tuyệt đối so với kỳ trước), "
-        "không phải theo quy mô doanh thu — giúp thấy đúng cửa hàng nào đang "
-        "kéo tăng/giảm kết quả chung, bất kể cửa hàng lớn hay nhỏ."
-    )
+# =====================================================
+# TOP / BOTTOM 10 THEO CHỦNG LOẠI / TÊN SẢN PHẨM
+# =====================================================
+st.subheader("🛒 Top / Bottom 10 theo Chủng loại & Sản phẩm")
 
-    impact_view = s_view.dropna(subset=["Net Impact"]).copy()
+dim_options = {"Chủng_loại": CAT_COL, "Tên_hàng": PROD_COL}
+dim_options = {k: v for k, v in dim_options.items() if v in df_f.columns}
 
-    if impact_view.empty:
-        st.info(
-            "Không có dữ liệu Net Impact cho kỳ này "
-            "(kỳ đầu tiên không có kỳ trước để so sánh)."
+if not dim_options:
+    st.info("Thiếu cột Chủng loại / Tên hàng trong dữ liệu.")
+else:
+    cp_c1, cp_c2 = st.columns(2)
+    with cp_c1:
+        sel_dim_label = st.radio(
+            "Xếp hạng theo",
+            list(dim_options.keys()),
+            horizontal=True,
+            key=REV + "cp_dim",
         )
-    else:
-        top10_impact = impact_view.sort_values("Net Impact", ascending=False).head(10).copy()
-        bottom10_impact = impact_view.sort_values("Net Impact", ascending=True).head(10).copy()
+    dim_col = dim_options[sel_dim_label]
 
-        colC, colD = st.columns(2)
-        with colC:
-            st.markdown("### 🟢 Top 10 Positive Impact")
-            st.dataframe(_fmt_store(top10_impact), use_container_width=True, hide_index=True)
-        with colD:
-            st.markdown("### 🔴 Top 10 Negative Impact")
-            st.dataframe(_fmt_store(bottom10_impact), use_container_width=True, hide_index=True)
+    cp_periods = summary["Label"].tolist()
+    with cp_c2:
+        sel_cp_period = st.selectbox(
+            "Chọn kỳ (Chủng loại / Sản phẩm)",
+            cp_periods,
+            index=len(cp_periods) - 1,
+            key=REV + "cp_period",
+        )
+
+    pos = cp_periods.index(sel_cp_period)
+    cur_time = summary["Time"].iloc[pos]
+    prev_time = summary["Time"].iloc[pos - 1] if pos > 0 else None
+
+    def _agg_dim(t):
+        d = df_f[df_f["Time"] == t].dropna(subset=[dim_col])
+        return d.groupby(d[dim_col].astype(str)).agg(
+            Tổng_Gross=("Tổng_Gross", "sum"),
+            Tổng_Net=("Tổng_Net", "sum"),
+            Số_đơn_hàng=("Số_CT", "nunique"),
+        )
+
+    cur = _agg_dim(cur_time)
+
+    # Ghép kỳ trước bằng outer join: sản phẩm có ở kỳ trước nhưng không bán
+    # kỳ này vẫn xuất hiện (Net = 0) -> Net Impact âm đúng bằng phần doanh thu mất đi.
+    if prev_time is not None:
+        prev = _agg_dim(prev_time).add_prefix("Prev_")
+        dim_df = cur.join(prev, how="outer").fillna(0)
+    else:
+        dim_df = cur.copy()
+        for c in ["Prev_Tổng_Gross", "Prev_Tổng_Net", "Prev_Số_đơn_hàng"]:
+            dim_df[c] = np.nan
+
+    dim_df.index.name = sel_dim_label
+
+    dim_df["AOV"] = np.where(
+        dim_df["Số_đơn_hàng"] > 0, dim_df["Tổng_Net"] / dim_df["Số_đơn_hàng"], np.nan
+    )
+    dim_df["Tỷ_lệ_CK (%)"] = np.where(
+        dim_df["Tổng_Gross"] != 0,
+        (1 - dim_df["Tổng_Net"] / dim_df["Tổng_Gross"]) * 100,
+        0,
+    )
+    dim_df["Net Impact"] = dim_df["Tổng_Net"] - dim_df["Prev_Tổng_Net"]
+    dim_df["Change Net%"] = np.where(
+        dim_df["Prev_Tổng_Net"] > 0,
+        (dim_df["Tổng_Net"] / dim_df["Prev_Tổng_Net"] - 1) * 100,
+        np.nan,
+    )
+    dim_df = dim_df.reset_index()
+
+    def _fmt_dim(df_in: pd.DataFrame) -> pd.DataFrame:
+        out = df_in[
+            [
+                sel_dim_label, "Tổng_Gross", "Tổng_Net", "Số_đơn_hàng", "AOV",
+                "Tỷ_lệ_CK (%)", "Change Net%", "Net Impact",
+            ]
+        ].copy()
+        for c in ["Tổng_Gross", "Tổng_Net", "Số_đơn_hàng", "AOV"]:
+            out[c] = out[c].apply(fmt_int)
+        out["Tỷ_lệ_CK (%)"] = out["Tỷ_lệ_CK (%)"].apply(lambda v: fmt_pct(v, 2))
+        out["Change Net%"] = out["Change Net%"].apply(lambda v: fmt_pct(v, 2, with_sign=True))
+        out["Net Impact"] = out["Net Impact"].apply(fmt_signed_int)
+        return out
+
+    # --- Top / Bottom theo doanh thu (chỉ tính mục có bán trong kỳ) ---
+    sold = dim_df[dim_df["Số_đơn_hàng"] > 0]
+    cp_top = sold.sort_values("Tổng_Net", ascending=False).head(10)
+    cp_bottom = sold.sort_values("Tổng_Net", ascending=True).head(10)
+
+    cpA, cpB = st.columns(2)
+    with cpA:
+        st.markdown(f"### 🏆 Top 10 {sel_dim_label} (theo doanh thu)")
+        st.dataframe(_fmt_dim(cp_top), use_container_width=True, hide_index=True)
+    with cpB:
+        st.markdown(f"### 📉 Bottom 10 {sel_dim_label} (theo doanh thu)")
+        st.dataframe(_fmt_dim(cp_bottom), use_container_width=True, hide_index=True)  
