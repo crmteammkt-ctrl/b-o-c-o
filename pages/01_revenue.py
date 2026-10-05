@@ -49,7 +49,7 @@ def fmt_signed_int(x):
 # - Region, Điểm_mua_hàng, LoaiCT: category hoá (cardinality thấp).
 @st.cache_data(show_spinner=False, max_entries=3, ttl=3600)
 def load_data():
-    want_cols = ["Ngày", "LoaiCT", "Region", "Điểm_mua_hàng", "Tổng_Gross", "Tổng_Net", "Số_CT"]
+    want_cols = ["Ngày", "LoaiCT", "Region", "Điểm_mua_hàng", "Tổng_Gross", "Tổng_Net", "Số_CT","Chủng_loại","Tên_hàng"]
 
     try:
         import pyarrow.parquet as pq
@@ -75,7 +75,7 @@ def load_data():
         codes, _ = pd.factorize(df["Số_CT"])
         df["Số_CT"] = codes.astype("int32")
 
-    for c in ["LoaiCT", "Region", "Điểm_mua_hàng"]:
+    for c in ["LoaiCT", "Region", "Điểm_mua_hàng","Chủng_loại","Tên_hàng"]:
         if c in df.columns:
             df[c] = df[c].astype("category")
 
@@ -602,6 +602,9 @@ else:
 # =====================================================
 # TOP / BOTTOM 10 THEO CHỦNG LOẠI / TÊN SẢN PHẨM
 # =====================================================
+CAT_COL = "Chủng_loại"
+PROD_COL = "Tên_hàng"
+
 st.subheader("🛒 Top / Bottom 10 theo Chủng loại & Sản phẩm")
 
 dim_options = {"Chủng_loại": CAT_COL, "Tên_hàng": PROD_COL}
