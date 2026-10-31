@@ -399,13 +399,15 @@ else:
 
     st.dataframe(reg_show, use_container_width=True, hide_index=True)
 
+
 # =====================================================
 # TOP / BOTTOM 10 STORE
 # =====================================================
-st.subheader("🏪 Top / Bottom 10")
+st.subheader("🏪 TOP / BOTTOM 10")
 
 if "Điểm_mua_hàng" not in df_f.columns:
     st.info("Thiếu cột Điểm_mua_hàng hoặc không có dữ liệu.")
+
 else:
     store = (
         df_f.groupby(["Điểm_mua_hàng", "Time"], observed=True)
@@ -425,20 +427,32 @@ else:
         0,
     )
 
-    # Net Impact = Net kỳ hiện tại - Net kỳ trước (chênh lệch tuyệt đối bằng tiền).
-    # Khác với Change Net% (biến động tương đối), Impact cho biết cửa hàng
-    # thực tế làm tăng/giảm bao nhiêu tiền Net so với kỳ trước.
-    store["Net Impact"] = store.groupby("Điểm_mua_hàng")["Tổng_Net"].diff()
+    store["Net Impact"] = store.groupby(
+        "Điểm_mua_hàng"
+    )["Tổng_Net"].diff()
 
-    store["Change Net%"] = store.groupby("Điểm_mua_hàng")["Tổng_Net"].pct_change() * 100
-    store["Change Gross%"] = store.groupby("Điểm_mua_hàng")["Tổng_Gross"].pct_change() * 100
-    store["Change ĐH%"] = store.groupby("Điểm_mua_hàng")["Số_đơn_hàng"].pct_change() * 100
+    store["Change Net%"] = (
+        store.groupby("Điểm_mua_hàng")["Tổng_Net"]
+        .pct_change() * 100
+    )
+
+    store["Change Gross%"] = (
+        store.groupby("Điểm_mua_hàng")["Tổng_Gross"]
+        .pct_change() * 100
+    )
+
+    store["Change ĐH%"] = (
+        store.groupby("Điểm_mua_hàng")["Số_đơn_hàng"]
+        .pct_change() * 100
+    )
+
     store["AOV"] = np.where(
         store["Số_đơn_hàng"] > 0,
         store["Tổng_Net"] / store["Số_đơn_hàng"],
         np.nan,
     )
 
+    # Mapping Region
     if "Region" in df_f.columns:
         store_region_map = (
             df_f[["Label", "Điểm_mua_hàng", "Region"]]
@@ -448,9 +462,12 @@ else:
             .reset_index()
         )
     else:
-        store_region_map = pd.DataFrame(columns=["Label", "Điểm_mua_hàng", "Region"])
+        store_region_map = pd.DataFrame(
+            columns=["Label", "Điểm_mua_hàng", "Region"]
+        )
 
     periods2 = summary["Label"].tolist()
+
     sel_period2 = st.selectbox(
         "Chọn kỳ (Top/Bottom)",
         periods2,
@@ -458,15 +475,27 @@ else:
         key=REV + "store_period",
     )
 
-    s_view = store[store["Label"] == sel_period2].copy()
+    s_view = store[
+        store["Label"] == sel_period2
+    ].copy()
 
     if not store_region_map.empty:
-        mode_map = store_region_map[store_region_map["Label"] == sel_period2].copy()
-        s_view = s_view.merge(mode_map[["Điểm_mua_hàng", "Region"]], on="Điểm_mua_hàng", how="left")
+        mode_map = store_region_map[
+            store_region_map["Label"] == sel_period2
+        ].copy()
+
+        s_view = s_view.merge(
+            mode_map[["Điểm_mua_hàng", "Region"]],
+            on="Điểm_mua_hàng",
+            how="left",
+        )
     else:
         s_view["Region"] = np.nan
 
-    region_opts = sorted([r for r in s_view["Region"].dropna().astype(str).unique().tolist()])
+    region_opts = sorted(
+        s_view["Region"].dropna().astype(str).unique().tolist()
+    )
+
     region_ui = ["All"] + region_opts
 
     if REV + "tb_region" not in st.session_state:
@@ -475,230 +504,424 @@ else:
     sel_r = st.selectbox(
         "Lọc Region (Top/Bottom)",
         region_ui,
-        index=region_ui.index(st.session_state[REV + "tb_region"])
-        if st.session_state[REV + "tb_region"] in region_ui else 0,
+        index=(
+            region_ui.index(st.session_state[REV + "tb_region"])
+            if st.session_state[REV + "tb_region"] in region_ui
+            else 0
+        ),
         key=REV + "tb_region",
     )
 
     if sel_r != "All":
-        s_view = s_view[s_view["Region"].astype(str) == sel_r].copy()
+        s_view = s_view[
+            s_view["Region"].astype(str) == sel_r
+        ].copy()
 
     if s_view.empty:
         st.info("Không có dữ liệu Top/Bottom theo lựa chọn hiện tại.")
-        st.stop()
 
-    # =====================================================
-    # BIẾN ĐỘNG THEO CỬA HÀNG (TORNADO CHART)
-    # Dùng chung bộ lọc kỳ + region của phần Top/Bottom (s_view)
-    # =====================================================
-    st.markdown(f"### 📊 Biến động theo cửa hàng — {sel_period2}")
-
-    metric_options = {
-        "Net": "Change Net%",
-        "Gross": "Change Gross%",
-        "Đơn hàng": "Change ĐH%",
-    }
-
-    sel_metric_label = st.selectbox(
-        "Chọn chỉ số biến động",
-        list(metric_options.keys()),
-        key=REV + "tb_change_metric",
-    )
-    sel_metric_col = metric_options[sel_metric_label]
-
-    chart_data = s_view.dropna(subset=[sel_metric_col]).copy()
-
-    if chart_data.empty:
-        st.info("Không có dữ liệu biến động cho kỳ này (kỳ đầu tiên không có kỳ trước để so sánh).")
     else:
-        chart_data = chart_data.sort_values(sel_metric_col, ascending=True)
 
-        fig_change = px.bar(
-            chart_data,
-            x=sel_metric_col,
-            y="Điểm_mua_hàng",
-            orientation="h",
-            text=chart_data[sel_metric_col].apply(lambda v: fmt_pct(v, 2, with_sign=True)),
-        )
+        # =====================================================
+        # FORMAT HELPER FOR STORE TABLES
+        # =====================================================
+        def _fmt_store(
+            df_in: pd.DataFrame,
+            include_impact: bool = True
+        ) -> pd.DataFrame:
 
-        colors = np.where(chart_data[sel_metric_col] >= 0, "#2ECC71", "#5B9BF0")
-        fig_change.update_traces(marker_color=colors, textposition="outside")
-        fig_change.update_layout(
-            xaxis_title=None,
-            yaxis_title=None,
-            yaxis=dict(
-                categoryorder="array",
-                categoryarray=chart_data["Điểm_mua_hàng"].tolist(),
-            ),
-            height=max(300, len(chart_data) * 35),
-            margin=dict(l=0, r=0, t=10, b=0),
-        )
-        st.plotly_chart(fig_change, use_container_width=True)
+            cols = [
+                "Label",
+                "Điểm_mua_hàng",
+                "Tổng_Gross",
+                "Tổng_Net",
+                "Số_đơn_hàng",
+                "AOV",
+                "Tỷ_lệ_CK (%)",
+                "Change Gross%",
+                "Change Net%",
+                "Net Impact",
+                "Change ĐH%",
+            ]
 
-    # =====================================================
-    # FORMAT HELPER FOR STORE TABLES
-    # =====================================================
-    def _fmt_store(df_in: pd.DataFrame, include_impact: bool = True) -> pd.DataFrame:
-        cols = [
-            "Label",
-            "Điểm_mua_hàng",
-            "Tổng_Gross",
-            "Tổng_Net",
-            "Số_đơn_hàng",
-            "AOV",
-            "Tỷ_lệ_CK (%)",
-            "Change Gross%",
-            "Change Net%",
-            "Net Impact",
-            "Change ĐH%",
-        ]
+            if not include_impact:
+                cols = [
+                    c for c in cols if c != "Net Impact"
+                ]
 
-        if not include_impact:
-            cols = [c for c in cols if c != "Net Impact"]
+            if "Region" in df_in.columns:
+                cols.insert(2, "Region")
 
-        if "Region" in df_in.columns:
-            cols.insert(2, "Region")
+            cols = [
+                c for c in cols if c in df_in.columns
+            ]
 
-        cols = [c for c in cols if c in df_in.columns]
+            out = df_in[cols].rename(
+                columns={"Label": "Kỳ"}
+            ).copy()
 
-        out = df_in[cols].rename(columns={"Label": "Kỳ"}).copy()
-
-        for c in ["Tổng_Gross", "Tổng_Net", "Số_đơn_hàng", "AOV"]:
-            if c in out.columns:
-                out[c] = out[c].apply(fmt_int)
-
-        if "Tỷ_lệ_CK (%)" in out.columns:
-            out["Tỷ_lệ_CK (%)"] = out["Tỷ_lệ_CK (%)"].apply(lambda v: fmt_pct(v, 2))
-
-        for c in ["Change Gross%", "Change Net%", "Change ĐH%"]:
-            if c in out.columns:
-                out[c] = out[c].apply(lambda v: fmt_pct(v, 2, with_sign=True))
-
-        if "Net Impact" in out.columns:
-            out["Net Impact"] = out["Net Impact"].apply(fmt_signed_int)
-
-        return out
-
-    st.caption(
-        "💡 Net Impact = Tổng_Net kỳ đang chọn − Tổng_Net kỳ trước. "
-        "Chỉ số này cho biết cửa hàng thực tế đóng góp/tổn thất bao nhiêu tiền Net, "
-        "không chỉ nhìn % tăng giảm."
-    )
-
-    # -----------------------------------------------------
-    # Top / Bottom theo DOANH THU (Tổng_Net hiện tại)
-    # -----------------------------------------------------
-    top10 = s_view.sort_values("Tổng_Net", ascending=False).head(10).copy()
-    bottom10 = s_view.sort_values("Tổng_Net", ascending=True).head(10).copy()
-
-    colA, colB = st.columns(2)
-    with colA:
-        st.markdown("### 🏆 Top 10 Điểm mua hàng (theo doanh thu)")
-        st.dataframe(_fmt_store(top10), use_container_width=True, hide_index=True)
-    with colB:
-        st.markdown("### 📉 Bottom 10 Điểm mua hàng (theo doanh thu)")
-        st.dataframe(_fmt_store(bottom10), use_container_width=True, hide_index=True)
-
-    # =====================================================
-    # TOP / BOTTOM 10 THEO CHỦNG LOẠI / TÊN HÀNG
-    # Dùng chung bộ lọc kỳ (sel_period2) + Region (sel_r) của phần Top/Bottom cửa hàng.
-    # =====================================================
-    CAT_COL = "Chủng_loại"
-    PROD_COL = "Tên_hàng"
-
-    st.markdown("---")
-    st.subheader("🛒 Top / Bottom 10 theo Chủng loại & Tên hàng")
-    st.caption(f"Kỳ **{sel_period2}** · Region **{sel_r}**")
-
-    dim_options = {"Chủng loại": CAT_COL, "Tên hàng": PROD_COL}
-    dim_options = {k: v for k, v in dim_options.items() if v in df_f.columns}
-
-    if not dim_options:
-        st.info("Thiếu cột Chủng_loại / Tên_hàng trong dữ liệu.")
-    else:
-        sel_dim_label = st.radio(
-            "Xếp hạng theo",
-            list(dim_options.keys()),
-            horizontal=True,
-            key=REV + "cp_dim",
-        )
-        dim_col = dim_options[sel_dim_label]
-
-        # Áp bộ lọc Region của Top/Bottom lên dữ liệu giao dịch
-        if sel_r != "All" and "Region" in df_f.columns:
-            df_cp = df_f[df_f["Region"].astype(str) == sel_r]
-        else:
-            df_cp = df_f
-
-        cp_periods = summary["Label"].tolist()
-        pos = cp_periods.index(sel_period2)
-        cur_time = summary["Time"].iloc[pos]
-        prev_time = summary["Time"].iloc[pos - 1] if pos > 0 else None
-
-        def _agg_dim(t):
-            d = df_cp[df_cp["Time"] == t].dropna(subset=[dim_col])
-            return d.groupby(d[dim_col].astype(str)).agg(
-                Tổng_Gross=("Tổng_Gross", "sum"),
-                Tổng_Net=("Tổng_Net", "sum"),
-                Số_đơn_hàng=("Số_CT", "nunique"),
-            )
-
-        cur = _agg_dim(cur_time)
-
-        # Outer join: mục có ở kỳ trước nhưng không bán kỳ này vẫn hiện (Net = 0),
-        # nên Net Impact âm đúng bằng phần doanh thu mất đi.
-        if prev_time is not None:
-            prev = _agg_dim(prev_time).add_prefix("Prev_")
-            dim_df = cur.join(prev, how="outer").fillna(0)
-        else:
-            dim_df = cur.copy()
-            for c in ["Prev_Tổng_Gross", "Prev_Tổng_Net", "Prev_Số_đơn_hàng"]:
-                dim_df[c] = np.nan
-
-        if dim_df.empty:
-            st.info("Không có dữ liệu Chủng loại / Tên hàng cho kỳ và Region đang chọn.")
-        else:
-            dim_df.index.name = sel_dim_label
-
-            dim_df["AOV"] = np.where(
-                dim_df["Số_đơn_hàng"] > 0, dim_df["Tổng_Net"] / dim_df["Số_đơn_hàng"], np.nan
-            )
-            dim_df["Tỷ_lệ_CK (%)"] = np.where(
-                dim_df["Tổng_Gross"] != 0,
-                (1 - dim_df["Tổng_Net"] / dim_df["Tổng_Gross"]) * 100,
-                0,
-            )
-            dim_df["Net Impact"] = dim_df["Tổng_Net"] - dim_df["Prev_Tổng_Net"]
-            dim_df["Change Net%"] = np.where(
-                dim_df["Prev_Tổng_Net"] > 0,
-                (dim_df["Tổng_Net"] / dim_df["Prev_Tổng_Net"] - 1) * 100,
-                np.nan,
-            )
-            dim_df = dim_df.reset_index()
-
-            def _fmt_dim(df_in: pd.DataFrame) -> pd.DataFrame:
-                out = df_in[
-                    [
-                        sel_dim_label, "Tổng_Gross", "Tổng_Net", "Số_đơn_hàng", "AOV",
-                        "Tỷ_lệ_CK (%)", "Change Net%", "Net Impact",
-                    ]
-                ].copy()
-                for c in ["Tổng_Gross", "Tổng_Net", "Số_đơn_hàng", "AOV"]:
+            for c in [
+                "Tổng_Gross",
+                "Tổng_Net",
+                "Số_đơn_hàng",
+                "AOV",
+            ]:
+                if c in out.columns:
                     out[c] = out[c].apply(fmt_int)
-                out["Tỷ_lệ_CK (%)"] = out["Tỷ_lệ_CK (%)"].apply(lambda v: fmt_pct(v, 2))
-                out["Change Net%"] = out["Change Net%"].apply(lambda v: fmt_pct(v, 2, with_sign=True))
-                out["Net Impact"] = out["Net Impact"].apply(fmt_signed_int)
-                return out
 
-            # --- Top / Bottom theo doanh thu (chỉ tính mục có bán trong kỳ) ---
-            sold = dim_df[dim_df["Số_đơn_hàng"] > 0]
-            cp_top = sold.sort_values("Tổng_Net", ascending=False).head(10)
-            cp_bottom = sold.sort_values("Tổng_Net", ascending=True).head(10)
+            if "Tỷ_lệ_CK (%)" in out.columns:
+                out["Tỷ_lệ_CK (%)"] = out[
+                    "Tỷ_lệ_CK (%)"
+                ].apply(lambda v: fmt_pct(v, 2))
 
-            cpA, cpB = st.columns(2)
-            with cpA:
-                st.markdown(f"### 🏆 Top 10 {sel_dim_label} (theo doanh thu)")
-                st.dataframe(_fmt_dim(cp_top), use_container_width=True, hide_index=True)
-            with cpB:
-                st.markdown(f"### 📉 Bottom 10 {sel_dim_label} (theo doanh thu)")
-                st.dataframe(_fmt_dim(cp_bottom), use_container_width=True, hide_index=True)
+            for c in [
+                "Change Gross%",
+                "Change Net%",
+                "Change ĐH%",
+            ]:
+                if c in out.columns:
+                    out[c] = out[c].apply(
+                        lambda v: fmt_pct(
+                            v, 2, with_sign=True
+                        )
+                    )
+
+            if "Net Impact" in out.columns:
+                out["Net Impact"] = out[
+                    "Net Impact"
+                ].apply(fmt_signed_int)
+
+            return out
+
+        # =====================================================
+        # 1. BIẾN ĐỘNG THEO CỬA HÀNG
+        # =====================================================
+        with st.expander(
+            f"📊 Biến động theo cửa hàng — {sel_period2}",
+            expanded=False,
+        ):
+            metric_options = {
+                "Net": "Change Net%",
+                "Gross": "Change Gross%",
+                "Đơn hàng": "Change ĐH%",
+            }
+
+            sel_metric_label = st.selectbox(
+                "Chọn chỉ số biến động",
+                list(metric_options.keys()),
+                key=REV + "tb_change_metric",
+            )
+
+            sel_metric_col = metric_options[
+                sel_metric_label
+            ]
+
+            chart_data = s_view.dropna(
+                subset=[sel_metric_col]
+            ).copy()
+
+            if chart_data.empty:
+                st.info(
+                    "Không có dữ liệu biến động cho kỳ này "
+                    "(kỳ đầu tiên không có kỳ trước để so sánh)."
+                )
+
+            else:
+                chart_data = chart_data.sort_values(
+                    sel_metric_col,
+                    ascending=True,
+                )
+
+                fig_change = px.bar(
+                    chart_data,
+                    x=sel_metric_col,
+                    y="Điểm_mua_hàng",
+                    orientation="h",
+                    text=chart_data[sel_metric_col].apply(
+                        lambda v: fmt_pct(
+                            v, 2, with_sign=True
+                        )
+                    ),
+                )
+
+                colors = np.where(
+                    chart_data[sel_metric_col] >= 0,
+                    "#2ECC71",
+                    "#5B9BF0",
+                )
+
+                fig_change.update_traces(
+                    marker_color=colors,
+                    textposition="outside",
+                    cliponaxis=False,
+                )
+
+                fig_change.update_layout(
+                    xaxis_title=None,
+                    yaxis_title=None,
+                    yaxis=dict(
+                        categoryorder="array",
+                        categoryarray=chart_data[
+                            "Điểm_mua_hàng"
+                        ].tolist(),
+                    ),
+                    height=max(
+                        300,
+                        len(chart_data) * 35
+                    ),
+                    margin=dict(
+                        l=0, r=40, t=10, b=0
+                    ),
+                )
+
+                st.plotly_chart(
+                    fig_change,
+                    use_container_width=True,
+                )
+
+        # =====================================================
+        # 2. TOP 10 THEO DOANH THU
+        # =====================================================
+        top10 = s_view.sort_values(
+            "Tổng_Net",
+            ascending=False
+        ).head(10).copy()
+
+        with st.expander(
+            "🏆 TOP 10 ĐIỂM MUA HÀNG — THEO DOANH THU",
+            expanded=False,
+        ):
+            st.dataframe(
+                _fmt_store(top10),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # =====================================================
+        # 3. BOTTOM 10 THEO DOANH THU
+        # =====================================================
+        bottom10 = s_view.sort_values(
+            "Tổng_Net",
+            ascending=True
+        ).head(10).copy()
+
+        with st.expander(
+            "📉 BOTTOM 10 ĐIỂM MUA HÀNG — THEO DOANH THU",
+            expanded=False,
+        ):
+            st.dataframe(
+                _fmt_store(bottom10),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # =====================================================
+        # 4. TOP / BOTTOM THEO CHỦNG LOẠI / TÊN HÀNG
+        # =====================================================
+        CAT_COL = "Chủng_loại"
+        PROD_COL = "Tên_hàng"
+
+        with st.expander(
+            "🛒 TOP / BOTTOM 10 THEO CHỦNG LOẠI & TÊN HÀNG",
+            expanded=False,
+        ):
+            st.caption(
+                f"Kỳ: {sel_period2} | Region: {sel_r}"
+            )
+
+            dim_options = {
+                "Chủng loại": CAT_COL,
+                "Tên hàng": PROD_COL,
+            }
+
+            dim_options = {
+                k: v for k, v in dim_options.items()
+                if v in df_f.columns
+            }
+
+            if not dim_options:
+                st.info(
+                    "Thiếu cột Chủng_loại / Tên_hàng trong dữ liệu."
+                )
+
+            else:
+                sel_dim_label = st.radio(
+                    "Xếp hạng theo",
+                    list(dim_options.keys()),
+                    horizontal=True,
+                    key=REV + "cp_dim",
+                )
+
+                dim_col = dim_options[sel_dim_label]
+
+                if sel_r != "All" and "Region" in df_f.columns:
+                    df_cp = df_f[
+                        df_f["Region"].astype(str) == sel_r
+                    ]
+                else:
+                    df_cp = df_f
+
+                cp_periods = summary["Label"].tolist()
+                pos = cp_periods.index(sel_period2)
+
+                cur_time = summary["Time"].iloc[pos]
+                prev_time = (
+                    summary["Time"].iloc[pos - 1]
+                    if pos > 0 else None
+                )
+
+                def _agg_dim(t):
+                    d = df_cp[
+                        df_cp["Time"] == t
+                    ].dropna(subset=[dim_col])
+
+                    return d.groupby(
+                        d[dim_col].astype(str)
+                    ).agg(
+                        Tổng_Gross=("Tổng_Gross", "sum"),
+                        Tổng_Net=("Tổng_Net", "sum"),
+                        Số_đơn_hàng=("Số_CT", "nunique"),
+                    )
+
+                cur = _agg_dim(cur_time)
+
+                if prev_time is not None:
+                    prev = _agg_dim(prev_time).add_prefix(
+                        "Prev_"
+                    )
+
+                    dim_df = cur.join(
+                        prev,
+                        how="outer"
+                    ).fillna(0)
+
+                else:
+                    dim_df = cur.copy()
+
+                    for c in [
+                        "Prev_Tổng_Gross",
+                        "Prev_Tổng_Net",
+                        "Prev_Số_đơn_hàng",
+                    ]:
+                        dim_df[c] = np.nan
+
+                if dim_df.empty:
+                    st.info(
+                        "Không có dữ liệu Chủng loại / Tên hàng "
+                        "cho kỳ và Region đang chọn."
+                    )
+
+                else:
+                    dim_df.index.name = sel_dim_label
+
+                    dim_df["AOV"] = np.where(
+                        dim_df["Số_đơn_hàng"] > 0,
+                        dim_df["Tổng_Net"]
+                        / dim_df["Số_đơn_hàng"],
+                        np.nan,
+                    )
+
+                    dim_df["Tỷ_lệ_CK (%)"] = np.where(
+                        dim_df["Tổng_Gross"] != 0,
+                        (
+                            1 - dim_df["Tổng_Net"]
+                            / dim_df["Tổng_Gross"]
+                        ) * 100,
+                        0,
+                    )
+
+                    dim_df["Net Impact"] = (
+                        dim_df["Tổng_Net"]
+                        - dim_df["Prev_Tổng_Net"]
+                    )
+
+                    dim_df["Change Net%"] = np.where(
+                        dim_df["Prev_Tổng_Net"] > 0,
+                        (
+                            dim_df["Tổng_Net"]
+                            / dim_df["Prev_Tổng_Net"] - 1
+                        ) * 100,
+                        np.nan,
+                    )
+
+                    dim_df = dim_df.reset_index()
+
+                    def _fmt_dim(
+                        df_in: pd.DataFrame
+                    ) -> pd.DataFrame:
+
+                        out = df_in[
+                            [
+                                sel_dim_label,
+                                "Tổng_Gross",
+                                "Tổng_Net",
+                                "Số_đơn_hàng",
+                                "AOV",
+                                "Tỷ_lệ_CK (%)",
+                                "Change Net%",
+                                "Net Impact",
+                            ]
+                        ].copy()
+
+                        for c in [
+                            "Tổng_Gross",
+                            "Tổng_Net",
+                            "Số_đơn_hàng",
+                            "AOV",
+                        ]:
+                            out[c] = out[c].apply(fmt_int)
+
+                        out["Tỷ_lệ_CK (%)"] = out[
+                            "Tỷ_lệ_CK (%)"
+                        ].apply(
+                            lambda v: fmt_pct(v, 2)
+                        )
+
+                        out["Change Net%"] = out[
+                            "Change Net%"
+                        ].apply(
+                            lambda v: fmt_pct(
+                                v, 2, with_sign=True
+                            )
+                        )
+
+                        out["Net Impact"] = out[
+                            "Net Impact"
+                        ].apply(fmt_signed_int)
+
+                        return out
+
+                    # Chỉ tính các mục có bán trong kỳ
+                    sold = dim_df[
+                        dim_df["Số_đơn_hàng"] > 0
+                    ]
+
+                    cp_top = sold.sort_values(
+                        "Tổng_Net",
+                        ascending=False
+                    ).head(10)
+
+                    cp_bottom = sold.sort_values(
+                        "Tổng_Net",
+                        ascending=True
+                    ).head(10)
+
+                    with st.expander(
+                        f"🏆 TOP 10 {sel_dim_label.upper()}",
+                        expanded=False,
+                    ):
+                        st.dataframe(
+                            _fmt_dim(cp_top),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+
+                    with st.expander(
+                        f"📉 BOTTOM 10 {sel_dim_label.upper()}",
+                        expanded=False,
+                    ):
+                        st.dataframe(
+                            _fmt_dim(cp_bottom),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
