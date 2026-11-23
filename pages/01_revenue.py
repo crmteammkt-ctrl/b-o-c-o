@@ -447,7 +447,7 @@ else:
     kpi_all = build_kpi(df_f, ["Time"])
     kpi_all["Region"] = "Tổng"
 
-    kpi = pd.concat([kpi_reg, kpi_all], ignore_index=True)
+    #kpi = pd.concat([kpi_reg, kpi_all], ignore_index=True)
     kpi["Region"] = kpi["Region"].astype(str)
     kpi = kpi.sort_values(["Time", "Region"]).reset_index(drop=True)
 
