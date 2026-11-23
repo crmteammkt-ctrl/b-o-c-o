@@ -38,6 +38,14 @@ def fmt_signed_int(x):
     except Exception:
         return ""
 
+def fmt_dec(x, decimals=2):
+    if pd.isna(x):
+        return ""
+    try:
+        return f"{float(x):,.{decimals}f}"
+    except Exception:
+        return ""
+
 # =====================================================
 # LOAD DATA (đã tối ưu RAM)
 # =====================================================
@@ -49,7 +57,7 @@ def fmt_signed_int(x):
 # - Region, Điểm_mua_hàng, LoaiCT: category hoá (cardinality thấp).
 @st.cache_data(show_spinner=False, max_entries=3, ttl=3600)
 def load_data():
-    want_cols = ["Ngày", "LoaiCT", "Region", "Điểm_mua_hàng", "Tổng_Gross", "Tổng_Net", "Số_CT","Chủng_loại","Tên_hàng"]
+    want_cols = ["Ngày", "LoaiCT", "Region", "Điểm_mua_hàng", "Tổng_Gross", "Tổng_Net", "Số_CT","Chủng_loại","Tên_hàng","Số_lượng"]
 
     try:
         import pyarrow.parquet as pq
@@ -67,7 +75,7 @@ def load_data():
         df["Ngày"] = pd.to_datetime(df["Ngày"], errors="coerce")
         df = df.dropna(subset=["Ngày"])
 
-    for c in ["Tổng_Gross", "Tổng_Net"]:
+    for c in ["Tổng_Gross", "Tổng_Net","Số_lượng"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
@@ -398,6 +406,196 @@ else:
             reg_show[c] = reg_show[c].apply(lambda v: fmt_pct(v, 2, with_sign=True))
 
     st.dataframe(reg_show, use_container_width=True, hide_index=True)
+
+# =====================================================
+# KPI THEO REGION x KỲ (bảng + biểu đồ)
+# =====================================================
+st.subheader("🧮 KPI chi tiết theo Region & Kỳ")
+
+REQUIRED = {"Region", "Tên_hàng", "Số_CT", "Tổng_Net"}
+if not REQUIRED.issubset(df_f.columns):
+    st.info("Thiếu cột Region / Tên_hàng / Số_CT / Tổng_Net để tính KPI.")
+else:
+    QTY_COL = "Số_lượng"
+    has_qty = QTY_COL in df_f.columns
+
+    # Nếu không có Số_lượng -> đếm số dòng hàng làm "số món"
+    qty_src, qty_fn = (QTY_COL, "sum") if has_qty else ("Tổng_Net", "size")
+
+    def build_kpi(d: pd.DataFrame, keys: list) -> pd.DataFrame:
+        out = (
+            d.groupby(keys, observed=True)
+            .agg(
+                Label=("Label", "first"),
+                Doanh_thu=("Tổng_Net", "sum"),
+                Số_bill=("Số_CT", "nunique"),
+                Số_sản_phẩm=("Tên_hàng", "nunique"),
+                Số_món=(qty_src, qty_fn),
+            )
+            .reset_index()
+        )
+        out["AOV"] = np.where(out["Số_bill"] > 0, out["Doanh_thu"] / out["Số_bill"], np.nan)
+        out["Items_per_Bill"] = np.where(out["Số_bill"] > 0, out["Số_món"] / out["Số_bill"], np.nan)
+        out["Net_per_Product"] = np.where(
+            out["Số_sản_phẩm"] > 0, out["Doanh_thu"] / out["Số_sản_phẩm"], np.nan
+        )
+        return out
+
+    kpi_reg = build_kpi(df_f, ["Region", "Time"])
+
+    # Dòng "Tổng" (toàn bộ Region) - tính riêng để nunique không bị cộng trùng
+    kpi_all = build_kpi(df_f, ["Time"])
+    kpi_all["Region"] = "Tổng"
+
+    kpi = pd.concat([kpi_reg, kpi_all], ignore_index=True)
+    kpi["Region"] = kpi["Region"].astype(str)
+    kpi = kpi.sort_values(["Time", "Region"]).reset_index(drop=True)
+
+    if not has_qty:
+        st.caption(
+            "ℹ️ Chưa có cột **Số_lượng** → *Items per Bill* đang tính theo "
+            "**số dòng hàng / số bill**."
+        )
+
+    KPI_METRICS = {
+        "Doanh thu (Net)": "Doanh_thu",
+        "Số bill": "Số_bill",
+        "Số sản phẩm": "Số_sản_phẩm",
+        "AOV": "AOV",
+        "Items per Bill": "Items_per_Bill",
+        "Net per Product": "Net_per_Product",
+    }
+
+    # ---------- BẢNG ----------
+    kpi_periods = summary["Label"].tolist()
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        kpi_scope = st.radio(
+            "Phạm vi bảng",
+            ["Một kỳ", "Tất cả các kỳ"],
+            horizontal=True,
+            key=REV + "kpi_scope",
+        )
+    with c2:
+        if kpi_scope == "Một kỳ":
+            kpi_period = st.selectbox(
+                "Chọn kỳ",
+                kpi_periods,
+                index=len(kpi_periods) - 1,
+                key=REV + "kpi_period",
+            )
+
+    kpi_view = kpi if kpi_scope == "Tất cả các kỳ" else kpi[kpi["Label"] == kpi_period]
+    kpi_view = kpi_view.sort_values(["Time", "Doanh_thu"], ascending=[True, False])
+
+    kpi_show = kpi_view[
+        ["Label", "Region", "Doanh_thu", "Số_bill", "Số_sản_phẩm",
+         "AOV", "Items_per_Bill", "Net_per_Product"]
+    ].rename(columns={
+        "Label": "Kỳ",
+        "Doanh_thu": "Doanh thu",
+        "Số_bill": "Số bill",
+        "Số_sản_phẩm": "Số sản phẩm",
+        "Items_per_Bill": "Items per Bill",
+        "Net_per_Product": "Net per Product",
+    }).copy()
+
+    for c in ["Doanh thu", "Số bill", "Số sản phẩm", "AOV", "Net per Product"]:
+        kpi_show[c] = kpi_show[c].apply(fmt_int)
+    kpi_show["Items per Bill"] = kpi_show["Items per Bill"].apply(lambda v: fmt_dec(v, 2))
+
+    st.dataframe(kpi_show, use_container_width=True, hide_index=True)
+
+    # ---------- BIỂU ĐỒ ----------
+    sel_kpi_label = st.selectbox(
+        "Chỉ số hiển thị trên biểu đồ",
+        list(KPI_METRICS.keys()),
+        key=REV + "kpi_metric",
+    )
+    m = KPI_METRICS[sel_kpi_label]
+
+    tab_trend, tab_heat, tab_bar = st.tabs(
+        ["📈 Xu hướng theo Region", "🔥 Heatmap Region × Kỳ", "📊 So sánh Region trong 1 kỳ"]
+    )
+
+    # 1) Xu hướng
+    with tab_trend:
+        trend = kpi[kpi["Region"] != "Tổng"]
+        show_total = st.checkbox("Hiện đường Tổng", value=True, key=REV + "kpi_show_total")
+        if show_total:
+            trend = kpi
+        fig_t = px.line(
+            trend.sort_values("Time"),
+            x="Time",
+            y=m,
+            color="Region",
+            markers=True,
+            title=f"{sel_kpi_label} theo {time_grain} và Region",
+            labels={m: sel_kpi_label, "Time": time_grain},
+        )
+        st.plotly_chart(fig_t, use_container_width=True)
+
+    # 2) Heatmap
+    with tab_heat:
+        heat_src = kpi[kpi["Region"] != "Tổng"]
+        pv = heat_src.pivot_table(index="Region", columns="Time", values=m, aggfunc="first")
+        pv = pv.sort_index(axis=1)
+        label_map = (
+            heat_src.drop_duplicates("Time").set_index("Time")["Label"].to_dict()
+        )
+        pv.columns = [label_map.get(t, str(t)) for t in pv.columns]
+
+        fig_h = px.imshow(
+            pv,
+            aspect="auto",
+            color_continuous_scale="Blues",
+            labels=dict(x="Kỳ", y="Region", color=sel_kpi_label),
+            title=f"Heatmap {sel_kpi_label}",
+            text_auto=".2s" if len(pv.columns) <= 15 else False,
+        )
+        fig_h.update_xaxes(side="top")
+        st.plotly_chart(fig_h, use_container_width=True)
+
+    # 3) So sánh Region trong một kỳ
+    with tab_bar:
+        bar_period = st.selectbox(
+            "Chọn kỳ",
+            kpi_periods,
+            index=len(kpi_periods) - 1,
+            key=REV + "kpi_bar_period",
+        )
+        bar_df = (
+            kpi[(kpi["Label"] == bar_period) & (kpi["Region"] != "Tổng")]
+            .sort_values(m, ascending=True)
+        )
+        total_row = kpi[(kpi["Label"] == bar_period) & (kpi["Region"] == "Tổng")]
+
+        fig_b = px.bar(
+            bar_df,
+            x=m,
+            y="Region",
+            orientation="h",
+            text=bar_df[m].apply(lambda v: fmt_dec(v, 2) if m == "Items_per_Bill" else fmt_int(v)),
+            title=f"{sel_kpi_label} theo Region — {bar_period}",
+            labels={m: sel_kpi_label},
+        )
+        fig_b.update_traces(textposition="outside", cliponaxis=False)
+
+        # Đường tham chiếu: giá trị toàn công ty (chỉ hợp lý với chỉ số dạng tỷ lệ)
+        if m in ("AOV", "Items_per_Bill", "Net_per_Product") and not total_row.empty:
+            fig_b.add_vline(
+                x=float(total_row[m].iloc[0]),
+                line_dash="dash",
+                annotation_text="Toàn công ty",
+                annotation_position="top",
+            )
+
+        fig_b.update_layout(
+            yaxis_title=None,
+            height=max(300, len(bar_df) * 45),
+            margin=dict(l=0, r=40, t=50, b=0),
+        )
+        st.plotly_chart(fig_b, use_container_width=True)
 
 
 # =====================================================
